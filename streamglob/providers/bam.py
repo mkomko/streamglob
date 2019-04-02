@@ -670,8 +670,8 @@ class BAMMediaListing(model.MediaListing):
         # home_city = g["teams"]["home"]["team"]["name"].replace(home_team, "").strip()
         (home_city, home_team) = home_city_name
 
-        away_abbrev = g["teams"]["away"]["team"]["abbreviation"]
-        home_abbrev = g["teams"]["home"]["team"]["abbreviation"]
+        away_abbrev = g["teams"]["away"]["team"]["abbreviation"].lower()
+        home_abbrev = g["teams"]["home"]["team"]["abbreviation"].lower()
         away_record = tuple(
             [g["teams"]["away"]["leagueRecord"][x]
              for x in ["wins", "losses"]]
@@ -883,11 +883,11 @@ class BAMMediaListing(model.MediaListing):
 
     @property
     def start_date(self):
-        return self.start.strftime("%Y%m%d")
+        return self.start.strftime("%Y-%m-%d")
 
     @property
     def start_time(self):
-        return self.start.strftime("%H:%M:%S")
+        return self.start.strftime("%I%M%p").lower()
 
     @property
     def start_date_time(self):
