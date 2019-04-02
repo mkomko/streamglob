@@ -1227,9 +1227,6 @@ class WatchDialog(BasePopUp):
             (home_attr, f"{selection.home_city} {selection.home_team}")
         ])
 
-        # media = list(self.provider.get_media(self.game_id, title=self.media_title))
-        # media = list(self.provider.get_media(self.game_id))
-        # raise Exception(selection)
         try:
             media = selection.media
         except SGStreamNotFound as e:
@@ -1247,21 +1244,44 @@ class WatchDialog(BasePopUp):
             for e in media
         ]
 
-        # raise Exception(feed_map)
-
+        faves = [s.lower() for s in self.provider.config.teams.favorite ]
         try:
-            home_feed = next(
-                e for e in media
-                if e["feed_type"].lower() == "home"
-            )
-        except StopIteration:
-            home_feed = media[0]
+            # First, try to match the streams for the preferred media type, or
+            # all streams if none match
+            preferred_media = [
+                m for m in media
+                if (m.media_type[0].lower() ==
+                    self.provider.filters.media_type.value)
+            ]
+            if not len(preferred_media):
+                preferred_media = media
 
-        self.live_stream = (home_feed.get("state") == "live")
+            # Next, get either the feed for the team in the user's favorite
+            # teams list, or the home team if there's no match.
+            #
+            # TODO: list of preferred non-fave feeds, e.g. the "I can't stand
+            # listening to Michael McKay feature"
+            preferred_feed = next(
+                m for m in preferred_media
+                if (
+                        (selection.away_abbrev.lower() in faves
+                         and m["feed_type"].lower() == "away")
+                        or
+                        (selection.home_abbrev in faves
+                         and m["feed_type"].lower() == "home")
+                        or
+                        m["feed_type"].lower() == "home"
+                )
+            )
+
+        except StopIteration:
+            preferred_feed = preferred_media[0]
+
+        self.live_stream = (preferred_feed.get("state") == "live")
         self.feed_dropdown = Dropdown(
             feed_map,
             label="Feed",
-            default=home_feed["media_id"],
+            default=preferred_feed["media_id"],
             max_height=8
         )
         urwid.connect_signal(
@@ -1384,6 +1404,21 @@ class WatchDialog(BasePopUp):
             return key
 
 
+class MediaTypeFilter(ListingFilter):
+
+    label = "Default Media"
+
+    @property
+    def values(self):
+        return [
+            ("Video", "v"),
+            ("Audio", "a")
+        ]
+
+    @property
+    def default(self):
+        return self.provider.config.defaults.media
+
 class LiveStreamFilter(ListingFilter):
 
     @property
@@ -1464,6 +1499,7 @@ class BAMProviderMixin(BackgroundTasksMixin, abc.ABC):
     ])
 
     FILTERS_OPTIONS = AttrDict([
+        ("media_type",MediaTypeFilter),
         ("resolution", ResolutionFilter),
         ("live_stream", LiveStreamFilter),
         ("hide_spoilers", BooleanFilter),
@@ -1540,6 +1576,12 @@ class BAMProviderMixin(BackgroundTasksMixin, abc.ABC):
 
     def game_data(self, game_id):
 
+        try:
+            return self.game_map[game_id]
+        except Exception as e:
+            schedule = self.schedule(game_id=game_id)
+            game = schedule["dates"][-1]["games"][0]
+            self.game_map[game_id] = AttrDict(game)
         return self.game_map[game_id]
         # schedule = self.schedule(game_id=game_id)
         # try:
@@ -1717,8 +1759,8 @@ class BAMProviderMixin(BackgroundTasksMixin, abc.ABC):
 
         game_date = self.current_game_day().strftime("%Y/%m/%d")
 
-        if isinstance(identifier, int):
-            game_id = identifier
+        if identifier and identifier.isdigit():
+            game_id = int(identifier)
             schedule = self.schedule(
                 game_id = game_id
             )
@@ -1741,7 +1783,6 @@ class BAMProviderMixin(BackgroundTasksMixin, abc.ABC):
 
             if not team:
                 raise SGIncompleteIdentifier
-
 
             if "-" in team:
                 (sport_code, team) = team.split("-")
@@ -1766,12 +1807,18 @@ class BAMProviderMixin(BackgroundTasksMixin, abc.ABC):
         try:
             date = schedule["dates"][-1]
             game = date["games"][game_number-1]
+            game_date = dateutil.parser.parse(game["gameDate"]).date()
 
         except IndexError:
             raise SGException("No game %d found for %s on %s" %(
                 game_number, team, game_date)
             )
+
+
         g = self.LISTING_CLASS.from_json(self.IDENTIFIER, game)
+
+        if team is None:
+            team = game["teams"]["home"]["team"]["abbreviation"].lower()
 
         if team.lower() == g.away_abbrev.lower():
             feed_type = "away"
@@ -1846,11 +1893,18 @@ class BAMProviderMixin(BackgroundTasksMixin, abc.ABC):
         box.connect("play", play_highlight)
         return box
 
-    def get_source(self, selection, media_id=None, feed_type=None, **kwargs):
+    def get_source(
+            self, selection,
+            media_id=None,
+            media_type=None,
+            feed_type=None,
+            **kwargs
+    ):
         try:
             selected_media = next(
                 m for m in selection.media
                 if (not media_id or m.media_id == media_id)
+                and (not media_type or m.media_type.lower()[0] == media_type.lower()[0])
                 and (not feed_type or m.feed_type.lower() == feed_type.lower())
             )
         except StopIteration:
